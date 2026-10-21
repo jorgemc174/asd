@@ -17,11 +17,14 @@ public class MainActivity extends Activity {
   int d(float x){return (int)(x*getResources().getDisplayMetrics().density+.5f);}
   @Override public void onCreate(Bundle b) {
     super.onCreate(b);
+    if(Settings.canDrawOverlays(this)&&!getIntent().getBooleanExtra("open_settings",false)){
+       try{startForegroundService(new Intent(this,DrawService.class));finish();return;}catch(Exception ignored){}
+    }
     LinearLayout l=new LinearLayout(this);l.setOrientation(1);l.setPadding(d(24),d(45),d(24),d(24));l.setBackgroundColor(0xff101523);
     TextView h=new TextView(this);h.setText("✎ S Pen Overlay");h.setTextColor(-1);h.setTextSize(29);l.addView(h);
     TextView t=new TextView(this);t.setText("Dibuja sobre lo que ves en pantalla, sin hacer capturas.\n\nConcede el permiso y activa el botón flotante.");t.setTextSize(16);t.setTextColor(0xffc3d3e9);t.setPadding(0,d(20),0,d(25));l.addView(t);
     Button grant=new Button(this);grant.setText("1. Permitir sobre otras apps");l.addView(grant);
-    grant.setOnClickListener(v->startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName()))));
+    grant.setOnClickListener(v->startActivityForResult(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getPackageName())),501));
     Button start=new Button(this);start.setText("2. Activar lápiz flotante");l.addView(start);
     start.setOnClickListener(v->{if(!Settings.canDrawOverlays(this)){grant.performClick();return;}
       if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},123);
@@ -30,13 +33,21 @@ public class MainActivity extends Activity {
     TextView info=new TextView(this);info.setText("\nToca ✎ para escribir.\n\n🔴🔵🟡 colores · ⌫ borrador\n↶ deshacer · ⊗ limpiar\nⅡ pausar para usar otras apps · × cerrar");info.setTextColor(0xffb6c3d5);info.setTextSize(16);l.addView(info);
     setContentView(l);
   }
+  @Override protected void onActivityResult(int request,int result,Intent data){
+     super.onActivityResult(request,result,data);
+     if(request==501&&Settings.canDrawOverlays(this)){
+       try{startForegroundService(new Intent(this,DrawService.class));finish();}catch(Exception ignored){}
+     }
+  }
   public static class DrawService extends Service {
-    WindowManager wm; View ball, bar; Pad pad; boolean active, ballOn, barOn; WindowManager.LayoutParams bp;
+    WindowManager wm; View ball, bar; Pad pad; boolean active, ballOn, barOn, navigating;
+    WindowManager.LayoutParams bp,inkParams;
+    ArrayList<TextView> colorButtons=new ArrayList<>();TextView eraserButton;
     int dp(float f){return (int)(f*getResources().getDisplayMetrics().density+.5f);}
     @Override public void onCreate(){super.onCreate();
       NotificationManager nm=getSystemService(NotificationManager.class);
       nm.createNotificationChannel(new NotificationChannel("drawing","Lápiz flotante",NotificationManager.IMPORTANCE_LOW));
-      PendingIntent launch=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class),PendingIntent.FLAG_IMMUTABLE);
+      PendingIntent launch=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class).putExtra("open_settings",true),PendingIntent.FLAG_IMMUTABLE);
       startForeground(1888,new Notification.Builder(this,"drawing").setSmallIcon(android.R.drawable.ic_menu_edit).setContentTitle("S Pen Overlay activo").setContentText("Toca ✎ para dibujar").setContentIntent(launch).setOngoing(true).build());
       wm=(WindowManager)getSystemService(WINDOW_SERVICE);pad=new Pad(this);bubble();
     }
@@ -59,23 +70,45 @@ public class MainActivity extends Activity {
     }
     void hideBall(){if(ballOn){wm.removeView(ball);ballOn=false;}}
     void showPad(){
-      if(active)return;hideBall();
-      wm.addView(pad,lp(-1,-1));active=true;
-      toolbar();
+      if(active){
+        if(navigating){
+          hideBall();inkParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+          inkParams.alpha=1.0f;wm.updateViewLayout(pad,inkParams);
+          navigating=false;toolbar();
+        }
+        return;
+      }
+      hideBall();inkParams=lp(-1,-1);wm.addView(pad,inkParams);active=true;navigating=false;toolbar();
     }
-    void pause(){hideBar();if(active){wm.removeView(pad);active=false;}bubble();}
-    void tool(LinearLayout l,String s,Runnable cb){TextView t=item(s,22);l.addView(t,new LinearLayout.LayoutParams(dp(38),dp(42)));t.setOnClickListener(v->cb.run());}
+    void navigate(){if(!active)return;hideBar();
+      inkParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+      inkParams.alpha=.72f;wm.updateViewLayout(pad,inkParams);navigating=true;bubble();
+    }
+    void refreshTool(){
+      for(int i=0;i<colorButtons.size();i++){
+        TextView v=colorButtons.get(i),col=v;
+        boolean selected=!pad.erase&&pad.color==new int[]{Color.RED,0xff168bff,0xffffd600,Color.WHITE}[i];
+        v.setBackground(selected?bg(0xff34598e):null);
+        v.setText(selected?"◉":"●");v.setTextColor(new int[]{Color.RED,0xff168bff,0xffffd600,Color.WHITE}[i]);
+      }
+      if(eraserButton!=null){eraserButton.setBackground(pad.erase?bg(0xff34598e):null);eraserButton.setTextColor(pad.erase?0xffa4e6ff:Color.WHITE);}
+    }
+    GradientDrawable bg(int color){GradientDrawable gd=new GradientDrawable();gd.setColor(color);gd.setCornerRadius(dp(12));return gd;}
+    void tool(LinearLayout l,String s,Runnable cb){TextView t=item(s,22);l.addView(t,new LinearLayout.LayoutParams(dp(38),dp(42)));t.setOnClickListener(v->{cb.run();refreshTool();});}
+    void swatch(LinearLayout l,int color){TextView t=item("●",30);t.setTextColor(color);colorButtons.add(t);l.addView(t,new LinearLayout.LayoutParams(dp(37),dp(42)));
+      t.setOnClickListener(v->{pad.choose(color);refreshTool();});}
     void toolbar(){
       if(bar==null){
         LinearLayout row=new LinearLayout(this);row.setPadding(dp(4),dp(3),dp(4),dp(3));row.setGravity(Gravity.CENTER);
         GradientDrawable shape=new GradientDrawable();shape.setColor(0xf0151d30);shape.setCornerRadius(dp(15));row.setBackground(shape);
-        tool(row,"🔴",()->pad.choose(Color.RED));tool(row,"🔵",()->pad.choose(0xff168bff));
-        tool(row,"🟡",()->pad.choose(0xffffd600));tool(row,"◻",()->pad.choose(Color.WHITE));
-        tool(row,"⌫",()->pad.erase=true);tool(row,"↶",()->pad.undo());tool(row,"⊗",()->pad.clean());
-        tool(row,"Ⅱ",this::pause);tool(row,"×",this::stopSelf);bar=row;
+        swatch(row,Color.RED);swatch(row,0xff168bff);swatch(row,0xffffd600);swatch(row,Color.WHITE);
+        eraserButton=item("⌫",24);eraserButton.setContentDescription("Goma");row.addView(eraserButton,new LinearLayout.LayoutParams(dp(38),dp(42)));
+        eraserButton.setOnClickListener(v->{pad.erase=true;refreshTool();});
+        tool(row,"↶",()->pad.undo());tool(row,"⊗",()->pad.clean());
+        tool(row,"☞",this::navigate);tool(row,"×",this::stopSelf);bar=row;
       }
       WindowManager.LayoutParams p=lp(-2,dp(48));p.gravity=Gravity.TOP|Gravity.CENTER_HORIZONTAL;p.y=dp(20);
-      wm.addView(bar,p);barOn=true;
+      wm.addView(bar,p);barOn=true;refreshTool();
     }
     void hideBar(){if(barOn){wm.removeView(bar);barOn=false;}}
     @Override public void onDestroy(){hideBar();if(active)wm.removeView(pad);hideBall();super.onDestroy();}
@@ -85,6 +118,7 @@ public class MainActivity extends Activity {
       ArrayList<Stroke> paths=new ArrayList<>();Stroke cur;int color=Color.RED;boolean erase=false;
       Paint p=new Paint(3);
       Pad(Context c){super(c);setLayerType(View.LAYER_TYPE_HARDWARE,null);}
+      boolean held(MotionEvent e){return (e.getButtonState()&(MotionEvent.BUTTON_STYLUS_PRIMARY|MotionEvent.BUTTON_STYLUS_SECONDARY))!=0;}
       void choose(int c){color=c;erase=false;}
       void undo(){if(!paths.isEmpty())paths.remove(paths.size()-1);invalidate();}
       void clean(){paths.clear();invalidate();}
@@ -92,8 +126,14 @@ public class MainActivity extends Activity {
         p.reset();p.setAntiAlias(true);p.setColor(s.color);p.setStrokeWidth(dp(s.erase?28:4));p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
         p.setXfermode(s.erase?new PorterDuffXfermode(PorterDuff.Mode.CLEAR):null);c.drawPath(s.path,p);
       }p.setXfermode(null);c.restoreToCount(layer);}
-      @Override public boolean onTouchEvent(MotionEvent e){int action=e.getActionMasked();if(action==MotionEvent.ACTION_DOWN){cur=new Stroke(color,erase||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER);cur.path.moveTo(e.getX(),e.getY());cur.path.lineTo(e.getX()+.02f,e.getY()+.02f);paths.add(cur);invalidate();return true;}
-        if(action==MotionEvent.ACTION_MOVE&&cur!=null){for(int k=0;k<e.getHistorySize();k++)cur.path.lineTo(e.getHistoricalX(k),e.getHistoricalY(k));cur.path.lineTo(e.getX(),e.getY());invalidate();return true;}
+      @Override public boolean onTouchEvent(MotionEvent e){int action=e.getActionMasked();if(action==MotionEvent.ACTION_DOWN){
+        int tt=e.getToolType(0);cur=null;if(tt!=MotionEvent.TOOL_TYPE_STYLUS&&tt!=MotionEvent.TOOL_TYPE_ERASER)return true;
+        cur=new Stroke(color,erase||tt==MotionEvent.TOOL_TYPE_ERASER||held(e));cur.path.moveTo(e.getX(),e.getY());cur.path.lineTo(e.getX()+.02f,e.getY()+.02f);paths.add(cur);invalidate();return true;
+      }
+        if(action==MotionEvent.ACTION_MOVE&&cur!=null){
+        boolean now=erase||held(e)||e.getToolType(0)==MotionEvent.TOOL_TYPE_ERASER;
+        if(cur.erase!=now){cur=new Stroke(color,now);cur.path.moveTo(e.getX(),e.getY());paths.add(cur);}
+        for(int k=0;k<e.getHistorySize();k++)cur.path.lineTo(e.getHistoricalX(k),e.getHistoricalY(k));cur.path.lineTo(e.getX(),e.getY());invalidate();return true;}
         if(action==MotionEvent.ACTION_UP||action==MotionEvent.ACTION_CANCEL){if(cur!=null)cur.path.lineTo(e.getX(),e.getY());cur=null;invalidate();return true;}return true;}
     }
   }

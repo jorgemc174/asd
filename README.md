@@ -1,3 +1,3 @@
 # S Pen Overlay
 
-Android application to draw live on top of other apps, using the S Pen. Build branch: spen-overlay-build.
+App Android para dibujar sobre cualquier aplicación con el S Pen. Se compila automáticamente desde la rama `spen-overlay-build`.

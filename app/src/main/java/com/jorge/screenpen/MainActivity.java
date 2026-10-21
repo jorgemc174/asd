@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
       if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},123);
       startForegroundService(new Intent(this,DrawService.class));finish();});
     Button stop=new Button(this);stop.setText("Detener");l.addView(stop);stop.setOnClickListener(v->stopService(new Intent(this,DrawService.class)));
-    TextView info=new TextView(this);info.setText("\nToca ✎ para escribir.\n\n🔴🔵🟡 colores · ⌫ borrador\n↶ deshacer · ⊗ limpiar\nⅡ pausar para usar otras apps · × cerrar");info.setTextColor(0xffb6c3d5);info.setTextSize(16);l.addView(info);
+    TextView info=new TextView(this);info.setText("\nToca ✎ para escribir.\n\n⠿ arrastrar · ↻ girar · ⌄ plegar\n◉ colores · goma · ↶ deshacer\n☞ navegar · × cerrar");info.setTextColor(0xffb6c3d5);info.setTextSize(16);l.addView(info);
     setContentView(l);
   }
   @Override protected void onActivityResult(int request,int result,Intent data){
@@ -40,8 +40,8 @@ public class MainActivity extends Activity {
      }
   }
   public static class DrawService extends Service {
-    WindowManager wm; View ball, bar; Pad pad; boolean active, ballOn, barOn, navigating;
-    WindowManager.LayoutParams bp,inkParams;
+    WindowManager wm; View ball, bar; Pad pad; boolean active, ballOn, barOn, navigating, verticalMenu;
+    WindowManager.LayoutParams bp,inkParams,menuParams;
     ArrayList<TextView> colorButtons=new ArrayList<>();EraserIcon eraserButton;
     int dp(float f){return (int)(f*getResources().getDisplayMetrics().density+.5f);}
     @Override public void onCreate(){super.onCreate();
@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
       nm.createNotificationChannel(new NotificationChannel("drawing","Lápiz flotante",NotificationManager.IMPORTANCE_LOW));
       PendingIntent launch=PendingIntent.getActivity(this,1,new Intent(this,MainActivity.class).putExtra("open_settings",true),PendingIntent.FLAG_IMMUTABLE);
       startForeground(1888,new Notification.Builder(this,"drawing").setSmallIcon(android.R.drawable.ic_menu_edit).setContentTitle("S Pen Overlay activo").setContentText("Toca ✎ para dibujar").setContentIntent(launch).setOngoing(true).build());
-      wm=(WindowManager)getSystemService(WINDOW_SERVICE);pad=new Pad(this);bubble();
+      wm=(WindowManager)getSystemService(WINDOW_SERVICE);pad=new Pad(this);verticalMenu=getSharedPreferences("floating_menu",MODE_PRIVATE).getBoolean("vertical",false);bubble();
     }
     @Override public int onStartCommand(Intent i,int f,int id){if(i!=null&&"stop".equals(i.getAction())){stopSelf();return START_NOT_STICKY;}return START_STICKY;}
     WindowManager.LayoutParams lp(int w,int h){WindowManager.LayoutParams p=new WindowManager.LayoutParams(w,h,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP|Gravity.START;return p;}
@@ -61,54 +61,179 @@ public class MainActivity extends Activity {
         final float[] down=new float[2];final int[] at=new int[2];final boolean[] drag={false};
         ball.setOnTouchListener((v,e)->{switch(e.getActionMasked()){
          case MotionEvent.ACTION_DOWN:down[0]=e.getRawX();down[1]=e.getRawY();at[0]=bp.x;at[1]=bp.y;drag[0]=false;return true;
-         case MotionEvent.ACTION_MOVE:int dx=(int)(e.getRawX()-down[0]),dy=(int)(e.getRawY()-down[1]);if(Math.abs(dx)+Math.abs(dy)>dp(9))drag[0]=true;if(drag[0]){bp.x=at[0]+dx;bp.y=at[1]+dy;wm.updateViewLayout(ball,bp);}return true;
+         case MotionEvent.ACTION_MOVE:int dx=(int)(e.getRawX()-down[0]),dy=(int)(e.getRawY()-down[1]);if(Math.abs(dx)+Math.abs(dy)>dp(9))drag[0]=true;if(drag[0]){bp.x=clamp(at[0]+dx,dp(8),screenWidth()-dp(62));bp.y=clamp(at[1]+dy,dp(8),screenHeight()-dp(62));wm.updateViewLayout(ball,bp);if(barOn)positionMenu();}return true;
          case MotionEvent.ACTION_UP:if(!drag[0])showPad();return true;
         }return true;});
       }
       if(bp==null){bp=lp(dp(55),dp(55));bp.x=getResources().getDisplayMetrics().widthPixels-dp(67);bp.y=dp(270);}
       wm.addView(ball,bp);ballOn=true;
     }
-    void hideBall(){if(ballOn){wm.removeView(ball);ballOn=false;}}
+    int screenWidth(){return getResources().getDisplayMetrics().widthPixels;}
+    int screenHeight(){return getResources().getDisplayMetrics().heightPixels;}
+    int clamp(int value,int low,int high){return Math.max(low,Math.min(value,Math.max(low,high)));}
+    void hideBall(){if(ballOn){ball.animate().cancel();wm.removeView(ball);ballOn=false;}}
+
     void showPad(){
-      if(active){
-        if(navigating){
-          hideBall();inkParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-          inkParams.alpha=1.0f;wm.updateViewLayout(pad,inkParams);
-          navigating=false;toolbar();
-        }
-        return;
+      if(!active){
+        hideBall();
+        inkParams=lp(-1,-1);wm.addView(pad,inkParams);
+        active=true;navigating=false;bubble();
+        toolbar();return;
       }
-      hideBall();inkParams=lp(-1,-1);wm.addView(pad,inkParams);active=true;navigating=false;toolbar();
+      if(navigating){
+        inkParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        inkParams.alpha=1f;wm.updateViewLayout(pad,inkParams);
+        navigating=false;toolbar();return;
+      }
+      if(barOn)hideBar(true);else toolbar();
     }
-    void navigate(){if(!active)return;hideBar();
+    void navigate(){if(!active)return;
+      hideBar(false);
       inkParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-      inkParams.alpha=.72f;wm.updateViewLayout(pad,inkParams);navigating=true;bubble();
+      inkParams.alpha=.72f;wm.updateViewLayout(pad,inkParams);navigating=true;
     }
     void refreshTool(){
       for(int i=0;i<colorButtons.size();i++){
-        TextView v=colorButtons.get(i),col=v;
-        boolean selected=!pad.erase&&pad.color==new int[]{Color.RED,0xff168bff,0xffffd600,Color.WHITE}[i];
+        TextView v=colorButtons.get(i);
+        int[] colors={Color.RED,0xff168bff,0xffffd600,Color.WHITE};
+        boolean selected=!pad.erase&&pad.color==colors[i];
         v.setBackground(selected?bg(0xff34598e):null);
-        v.setText(selected?"◉":"●");v.setTextColor(new int[]{Color.RED,0xff168bff,0xffffd600,Color.WHITE}[i]);
+        v.setText(selected?"◉":"●");v.setTextColor(colors[i]);
       }
       if(eraserButton!=null){eraserButton.selected=pad.erase;eraserButton.invalidate();}
     }
-    GradientDrawable bg(int color){GradientDrawable gd=new GradientDrawable();gd.setColor(color);gd.setCornerRadius(dp(12));return gd;}
-    void tool(LinearLayout l,String s,Runnable cb){TextView t=item(s,22);l.addView(t,new LinearLayout.LayoutParams(dp(38),dp(42)));t.setOnClickListener(v->{cb.run();refreshTool();});}
-    void swatch(LinearLayout l,int color){TextView t=item("●",30);t.setTextColor(color);colorButtons.add(t);l.addView(t,new LinearLayout.LayoutParams(dp(37),dp(42)));
+    GradientDrawable bg(int color){GradientDrawable gd=new GradientDrawable();gd.setColor(color);gd.setCornerRadius(dp(14));return gd;}
+    TextView button(String text,int size){TextView t=item(text,size);t.setTextColor(0xffe9f1ff);return t;}
+    void tool(LinearLayout l,String icon,Runnable cb){TextView t=button(icon,22);l.addView(t,new LinearLayout.LayoutParams(dp(40),dp(42)));t.setOnClickListener(v->{cb.run();refreshTool();});}
+    void swatch(LinearLayout l,int color){TextView t=item("●",30);t.setTextColor(color);colorButtons.add(t);l.addView(t,new LinearLayout.LayoutParams(dp(40),dp(42)));
       t.setOnClickListener(v->{pad.choose(color);refreshTool();});}
+    int menuWidth(){return dp(verticalMenu?128:352);}
+    int menuHeight(){return dp(verticalMenu?284:99);}
+    void positionMenu(){
+       if(menuParams==null||bar==null)return;
+       int width=menuParams.width,height=menuParams.height;
+       int x,y;
+       if(verticalMenu){
+          x=bp.x>screenWidth()/2?bp.x-width-dp(8):bp.x+dp(62);
+          y=bp.y-dp(25);
+       }else{
+          x=bp.x+dp(27)-width/2;
+          y=bp.y+dp(62);
+          if(y+height>screenHeight()-dp(8))y=bp.y-height-dp(8);
+       }
+       menuParams.x=clamp(x,dp(8),screenWidth()-width-dp(8));
+       menuParams.y=clamp(y,dp(8),screenHeight()-height-dp(8));
+       if(bar.getParent()!=null)wm.updateViewLayout(bar,menuParams);
+    }
+    void moveTogether(View handle){
+      final float[] first=new float[2];final int[] origin=new int[2];final boolean[] drag={false};
+      handle.setOnTouchListener((v,e)->{
+       switch(e.getActionMasked()){
+        case MotionEvent.ACTION_DOWN:
+          first[0]=e.getRawX();first[1]=e.getRawY();origin[0]=bp.x;origin[1]=bp.y;drag[0]=false;return true;
+        case MotionEvent.ACTION_MOVE:
+          int dx=(int)(e.getRawX()-first[0]),dy=(int)(e.getRawY()-first[1]);
+          if(Math.abs(dx)+Math.abs(dy)>dp(6))drag[0]=true;
+          if(drag[0]){bp.x=clamp(origin[0]+dx,dp(8),screenWidth()-dp(62));
+            bp.y=clamp(origin[1]+dy,dp(8),screenHeight()-dp(62));
+            wm.updateViewLayout(ball,bp);if(barOn)positionMenu();}
+          return true;
+        case MotionEvent.ACTION_UP:return true;
+       }return true;
+      });
+    }
+    void pair(LinearLayout parent,boolean colors){
+      LinearLayout r=new LinearLayout(this);r.setGravity(Gravity.CENTER);
+      if(colors){swatch(r,Color.RED);swatch(r,0xff168bff);}
+      else{tool(r,"↶",()->pad.undo());tool(r,"☞",this::navigate);}
+      parent.addView(r,new LinearLayout.LayoutParams(-1,dp(43)));
+    }
     void toolbar(){
+      if(navigating)return;
+      if(barOn)return;
       if(bar==null){
-        LinearLayout row=new LinearLayout(this);row.setPadding(dp(4),dp(3),dp(4),dp(3));row.setGravity(Gravity.CENTER);
-        GradientDrawable shape=new GradientDrawable();shape.setColor(0xf0151d30);shape.setCornerRadius(dp(15));row.setBackground(shape);
-        swatch(row,Color.RED);swatch(row,0xff168bff);swatch(row,0xffffd600);swatch(row,Color.WHITE);
-        eraserButton=new EraserIcon(this);eraserButton.setContentDescription("Goma");row.addView(eraserButton,new LinearLayout.LayoutParams(dp(38),dp(42)));
-        eraserButton.setOnClickListener(v->{pad.erase=true;refreshTool();});
-        tool(row,"↶",()->pad.undo());tool(row,"⊗",()->pad.clean());
-        tool(row,"☞",this::navigate);tool(row,"×",this::stopSelf);bar=row;
+        colorButtons.clear();eraserButton=null;
+        LinearLayout dock=new LinearLayout(this);dock.setOrientation(LinearLayout.VERTICAL);
+        dock.setPadding(dp(8),dp(5),dp(8),dp(5));
+        GradientDrawable background=bg(0xf51a243b);
+        background.setStroke(dp(1),0xff546987);
+        dock.setBackground(background);dock.setElevation(dp(14));
+        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView drag=button("⠿",25);drag.setContentDescription("Mover barra y lápiz flotante");
+        header.addView(drag,new LinearLayout.LayoutParams(dp(verticalMenu?28:38),dp(35)));moveTogether(drag);
+        TextView brand=button("S PEN",11);brand.setTextColor(0xff73e5d0);brand.setTypeface(null,1);
+        header.addView(brand,new LinearLayout.LayoutParams(0,dp(35),1));
+        TextView rotate=button("↻",24);rotate.setContentDescription("Girar barra horizontal y vertical");
+        header.addView(rotate,new LinearLayout.LayoutParams(dp(32),dp(35)));rotate.setOnClickListener(v->rotateToolbar());
+        TextView collapse=button("⌄",24);collapse.setContentDescription("Plegar menú");
+        header.addView(collapse,new LinearLayout.LayoutParams(dp(32),dp(35)));collapse.setOnClickListener(v->hideBar(true));
+        TextView exit=button("×",24);exit.setContentDescription("Cerrar aplicación");
+        if(!verticalMenu){header.addView(exit,new LinearLayout.LayoutParams(dp(30),dp(35)));exit.setOnClickListener(v->stopSelf());}
+        dock.addView(header,new LinearLayout.LayoutParams(-1,dp(36)));
+        if(verticalMenu){
+          LinearLayout r1=new LinearLayout(this);r1.setGravity(Gravity.CENTER);
+          swatch(r1,Color.RED);swatch(r1,0xff168bff);
+          dock.addView(r1,new LinearLayout.LayoutParams(-1,dp(43)));
+          LinearLayout r2=new LinearLayout(this);r2.setGravity(Gravity.CENTER);
+          swatch(r2,0xffffd600);swatch(r2,Color.WHITE);
+          dock.addView(r2,new LinearLayout.LayoutParams(-1,dp(43)));
+          LinearLayout r3=new LinearLayout(this);r3.setGravity(Gravity.CENTER);
+          eraserButton=new EraserIcon(this);eraserButton.setContentDescription("Goma");
+          r3.addView(eraserButton,new LinearLayout.LayoutParams(dp(40),dp(42)));
+          eraserButton.setOnClickListener(v->{pad.erase=true;refreshTool();});
+          tool(r3,"↶",()->pad.undo());
+          dock.addView(r3,new LinearLayout.LayoutParams(-1,dp(43)));
+          LinearLayout r4=new LinearLayout(this);r4.setGravity(Gravity.CENTER);
+          tool(r4,"⊗",()->pad.clean());tool(r4,"☞",this::navigate);
+          dock.addView(r4,new LinearLayout.LayoutParams(-1,dp(43)));
+          TextView stop=button("SALIR ×",12);stop.setContentDescription("Cerrar aplicación");
+          dock.addView(stop,new LinearLayout.LayoutParams(-1,dp(37)));stop.setOnClickListener(v->stopSelf());
+        }else{
+          LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER);
+          swatch(row,Color.RED);swatch(row,0xff168bff);swatch(row,0xffffd600);swatch(row,Color.WHITE);
+          eraserButton=new EraserIcon(this);eraserButton.setContentDescription("Goma");
+          row.addView(eraserButton,new LinearLayout.LayoutParams(dp(40),dp(42)));
+          eraserButton.setOnClickListener(v->{pad.erase=true;refreshTool();});
+          tool(row,"↶",()->pad.undo());tool(row,"⊗",()->pad.clean());tool(row,"☞",this::navigate);
+          dock.addView(row,new LinearLayout.LayoutParams(-1,dp(43)));
+        }
+        bar=dock;
       }
-      WindowManager.LayoutParams p=lp(-2,dp(48));p.gravity=Gravity.TOP|Gravity.CENTER_HORIZONTAL;p.y=dp(20);
-      wm.addView(bar,p);barOn=true;refreshTool();
+      menuParams=lp(Math.min(menuWidth(),screenWidth()-dp(16)),menuHeight());
+      positionMenu();
+      bar.animate().cancel();
+      if(bar.getParent()==null)wm.addView(bar,menuParams);
+      else wm.updateViewLayout(bar,menuParams);
+      barOn=true;
+      if(ball instanceof TextView)((TextView)ball).setText("⌄");
+      bar.setPivotX(clamp(bp.x+dp(27)-menuParams.x,0,menuParams.width));
+      bar.setPivotY(clamp(bp.y+dp(27)-menuParams.y,0,menuParams.height));
+      bar.setScaleX(.76f);bar.setScaleY(.76f);bar.setAlpha(0f);bar.setTranslationY(dp(12));
+      bar.animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f).setDuration(240)
+        .setInterpolator(new android.view.animation.OvershootInterpolator(.8f)).start();
+      refreshTool();
+    }
+    void hideBar(boolean animate){
+       if(bar==null)return;
+       bar.animate().cancel();barOn=false;
+       if(ball instanceof TextView)((TextView)ball).setText("✎");
+       final View closing=bar;
+       if(animate&&bar.getParent()!=null)
+         bar.animate().alpha(0).scaleX(.78f).scaleY(.78f).translationY(dp(8)).setDuration(130)
+           .withEndAction(()->{if(!barOn&&closing.getParent()!=null)wm.removeView(closing);}).start();
+       else if(bar.getParent()!=null)wm.removeView(bar);
+    }
+    void rotateToolbar(){
+      if(!barOn)return;
+      final View old=bar;barOn=false;
+      old.animate().cancel();
+      old.animate().alpha(.05f).scaleX(.86f).scaleY(.86f).rotation(8f).setDuration(120)
+        .withEndAction(()->{
+           if(old.getParent()!=null)wm.removeView(old);
+           verticalMenu=!verticalMenu;
+           getSharedPreferences("floating_menu",MODE_PRIVATE).edit().putBoolean("vertical",verticalMenu).apply();
+           bar=null;toolbar();
+        }).start();
     }
     class EraserIcon extends View {
       Paint brush=new Paint(Paint.ANTI_ALIAS_FLAG);boolean selected;
@@ -128,8 +253,17 @@ public class MainActivity extends Activity {
          c.drawLine(x-10*d,y+14*d,x+12*d,y+14*d,brush);
       }
     }
-    void hideBar(){if(barOn){wm.removeView(bar);barOn=false;}}
-    @Override public void onDestroy(){hideBar();if(active)wm.removeView(pad);hideBall();super.onDestroy();}
+    @Override public void onConfigurationChanged(android.content.res.Configuration newConfig){
+      super.onConfigurationChanged(newConfig);
+      if(bp!=null){bp.x=clamp(bp.x,dp(8),screenWidth()-dp(62));
+        bp.y=clamp(bp.y,dp(8),screenHeight()-dp(62));
+        if(ballOn)wm.updateViewLayout(ball,bp);}
+      if(barOn)positionMenu();
+    }
+    @Override public void onDestroy(){
+      if(bar!=null){bar.animate().cancel();if(bar.getParent()!=null)wm.removeView(bar);}
+      if(active)wm.removeView(pad);hideBall();super.onDestroy();
+    }
     @Override public IBinder onBind(Intent i){return null;}
     class Pad extends View {
       class Stroke {Path path=new Path();int color;boolean erase;Stroke(int c,boolean e){color=c;erase=e;}}

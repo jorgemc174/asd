@@ -42,7 +42,7 @@ public class MainActivity extends Activity {
   public static class DrawService extends Service {
     WindowManager wm; View ball, bar; Pad pad; boolean active, ballOn, barOn, navigating;
     WindowManager.LayoutParams bp,inkParams;
-    ArrayList<TextView> colorButtons=new ArrayList<>();TextView eraserButton;
+    ArrayList<TextView> colorButtons=new ArrayList<>();EraserIcon eraserButton;
     int dp(float f){return (int)(f*getResources().getDisplayMetrics().density+.5f);}
     @Override public void onCreate(){super.onCreate();
       NotificationManager nm=getSystemService(NotificationManager.class);
@@ -91,7 +91,7 @@ public class MainActivity extends Activity {
         v.setBackground(selected?bg(0xff34598e):null);
         v.setText(selected?"◉":"●");v.setTextColor(new int[]{Color.RED,0xff168bff,0xffffd600,Color.WHITE}[i]);
       }
-      if(eraserButton!=null){eraserButton.setBackground(pad.erase?bg(0xff34598e):null);eraserButton.setTextColor(pad.erase?0xffa4e6ff:Color.WHITE);}
+      if(eraserButton!=null){eraserButton.selected=pad.erase;eraserButton.invalidate();}
     }
     GradientDrawable bg(int color){GradientDrawable gd=new GradientDrawable();gd.setColor(color);gd.setCornerRadius(dp(12));return gd;}
     void tool(LinearLayout l,String s,Runnable cb){TextView t=item(s,22);l.addView(t,new LinearLayout.LayoutParams(dp(38),dp(42)));t.setOnClickListener(v->{cb.run();refreshTool();});}
@@ -102,13 +102,31 @@ public class MainActivity extends Activity {
         LinearLayout row=new LinearLayout(this);row.setPadding(dp(4),dp(3),dp(4),dp(3));row.setGravity(Gravity.CENTER);
         GradientDrawable shape=new GradientDrawable();shape.setColor(0xf0151d30);shape.setCornerRadius(dp(15));row.setBackground(shape);
         swatch(row,Color.RED);swatch(row,0xff168bff);swatch(row,0xffffd600);swatch(row,Color.WHITE);
-        eraserButton=item("⌫",24);eraserButton.setContentDescription("Goma");row.addView(eraserButton,new LinearLayout.LayoutParams(dp(38),dp(42)));
+        eraserButton=new EraserIcon(this);eraserButton.setContentDescription("Goma");row.addView(eraserButton,new LinearLayout.LayoutParams(dp(38),dp(42)));
         eraserButton.setOnClickListener(v->{pad.erase=true;refreshTool();});
         tool(row,"↶",()->pad.undo());tool(row,"⊗",()->pad.clean());
         tool(row,"☞",this::navigate);tool(row,"×",this::stopSelf);bar=row;
       }
       WindowManager.LayoutParams p=lp(-2,dp(48));p.gravity=Gravity.TOP|Gravity.CENTER_HORIZONTAL;p.y=dp(20);
       wm.addView(bar,p);barOn=true;refreshTool();
+    }
+    class EraserIcon extends View {
+      Paint brush=new Paint(Paint.ANTI_ALIAS_FLAG);boolean selected;
+      EraserIcon(Context c){super(c);}
+      @Override protected void onDraw(Canvas c){
+         float d=getResources().getDisplayMetrics().density;
+         float x=getWidth()/2f,y=getHeight()/2f;
+         if(selected){brush.setStyle(Paint.Style.FILL);brush.setColor(0xff34598e);
+           c.drawRoundRect(0,0,getWidth(),getHeight(),dp(12),dp(12),brush);}
+         brush.setColor(selected?0xffa4e6ff:0xffe5edff);brush.setStrokeWidth(2*d);
+         brush.setStyle(Paint.Style.STROKE);brush.setStrokeJoin(Paint.Join.ROUND);brush.setStrokeCap(Paint.Cap.ROUND);
+         Path e=new Path();e.moveTo(x-11*d,y+4*d);e.lineTo(x-1*d,y-10*d);
+         e.quadTo(x+1*d,y-12*d,x+3*d,y-10*d);e.lineTo(x+12*d,y-2*d);
+         e.quadTo(x+14*d,y,x+11*d,y+3*d);e.lineTo(x+2*d,y+12*d);
+         e.lineTo(x-5*d,y+12*d);e.close();c.drawPath(e,brush);
+         c.drawLine(x-3*d,y-6*d,x+5*d,y+3*d,brush);
+         c.drawLine(x-10*d,y+14*d,x+12*d,y+14*d,brush);
+      }
     }
     void hideBar(){if(barOn){wm.removeView(bar);barOn=false;}}
     @Override public void onDestroy(){hideBar();if(active)wm.removeView(pad);hideBall();super.onDestroy();}
